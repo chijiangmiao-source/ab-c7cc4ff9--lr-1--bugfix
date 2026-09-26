@@ -83,6 +83,32 @@ test('POST /api/review returns validation errors for bad grammar', () =>
     assert.ok(data.errors.some((e) => e.code === 'undefined-symbol'));
   }));
 
+test('POST /api/review clears the harness control grammar with 14 states and no conflict', () =>
+  withServer(async (port) => {
+    const res = await request(
+      port,
+      'POST',
+      '/api/review',
+      JSON.stringify({
+        terminals: 'a b c d e',
+        nonterminals: 'S A B',
+        start: 'S',
+        productions: 'S -> a A d\nS -> a B e\nS -> b A e\nS -> b B d\nA -> c\nB -> c',
+      })
+    );
+    assert.equal(res.status, 200);
+    const data = JSON.parse(res.body);
+    assert.equal(data.ok, true);
+    const a = data.analysis;
+    assert.equal(a.conflictFree, true);
+    assert.equal(a.conflictCount, 0);
+    assert.equal(a.firstConflict, null);
+    assert.equal(a.states.length, 14);
+    for (const row of a.actionTable) {
+      for (const acts of Object.values(row.actions)) assert.equal(acts.length, 1);
+    }
+  }));
+
 test('POST /api/review reports shift/reduce conflict evidence', () =>
   withServer(async (port) => {
     const res = await request(

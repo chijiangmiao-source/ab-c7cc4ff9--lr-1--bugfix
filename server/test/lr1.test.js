@@ -172,6 +172,84 @@ test('canonical LR(1) resolves an SLR false conflict via lookaheads (S -> L = R 
   assert.equal(a.states.length, 14);
 });
 
+test('harness control grammar (a/b A/B d/e, A|B -> c) is conflict free with 14 canonical LR(1) states', () => {
+  // Four S rules beginning with a/b, passing through A/B, ending in d/e; both
+  // A and B derive c. LR(0) cores of the c-successors coincide but their LR(1)
+  // lookaheads differ ({d,e} split by context), so canonical LR(1) keeps them
+  // as separate states and there must be no reduce/reduce conflict.
+  const spec = {
+    terminals: 'a b c d e',
+    nonterminals: 'S A B',
+    start: 'S',
+    productions: 'S -> a A d\nS -> a B e\nS -> b A e\nS -> b B d\nA -> c\nB -> c',
+  };
+  const a = build(spec);
+  assert.equal(a.conflictFree, true);
+  assert.equal(a.conflictCount, 0);
+  assert.equal(a.firstConflict, null);
+  assert.equal(a.states.length, 14);
+
+  // No ACTION cell may hold competing actions (in particular no competing
+  // reductions), and the single accept action lives on the end marker.
+  let accepts = 0;
+  for (const row of a.actionTable) {
+    for (const [t, acts] of Object.entries(row.actions)) {
+      assert.ok(acts.length <= 1, `state I${row.state} ACTION[${t}] has competing actions`);
+      assert.ok(!acts.some((x, i) => i > 0 && x.type === 'reduce'),
+        `state I${row.state} ACTION[${t}] has competing reductions`);
+      if (acts[0] && acts[0].type === 'accept') {
+        accepts += 1;
+        assert.equal(t, '$');
+      }
+    }
+  }
+  assert.equal(accepts, 1);
+
+  // Stable numbering: a second construction yields identical state contents.
+  const a2 = build(spec);
+  const sig = (x) => x.states.map((s) => `${s.id}:${s.items.map((i) => i.text).sort().join('&')}`).join('||');
+  assert.equal(sig(a), sig(a2));
+
+  // Items, transitions and tables must reconcile with one another:
+  //  - every item with a terminal after the dot implies the matching shift
+  //    entry targeting the goto state;
+  //  - every completed non-augmented item implies its reduce entry;
+  //  - GOTO columns equal the recorded nonterminal transitions.
+  const prodByText = new Map(a.productions.map((p) => [p.text, p]));
+  for (const st of a.states) {
+    const row = a.actionTable[st.id];
+    assert.equal(row.state, st.id);
+    for (const it of st.items) {
+      const m = it.text.match(/^(.*?) -> (.*?) , (.*)$/);
+      assert.ok(m, `bad item text: ${it.text}`);
+      const rhsTokens = m[2].split(' ');
+      const dotIdx = rhsTokens.indexOf('·');
+      const prod = prodByText.get(`${m[1]} -> ${rhsTokens.filter((t) => t !== '·').join(' ')}`);
+      assert.ok(prod, `item production not found: ${it.text}`);
+      if (dotIdx < rhsTokens.length - 1) {
+        const X = rhsTokens[dotIdx + 1];
+        assert.equal(st.transitions[X] !== undefined, true, `missing goto for ${X} in I${st.id}`);
+        if (a.terminals.includes(X)) {
+          const cell = row.actions[X];
+          assert.ok(cell && cell.length === 1, `I${st.id} ACTION[${X}] missing/ambiguous`);
+          assert.equal(cell[0].type, 'shift');
+          assert.equal(cell[0].state, st.transitions[X]);
+        }
+      } else if (prod.augmented) {
+        assert.deepEqual(row.actions[it.la].map((x) => x.type), ['accept']);
+      } else {
+        const cell = row.actions[it.la];
+        assert.ok(cell && cell.some((x) => x.type === 'reduce' && x.production === prod.index),
+          `I${st.id} ACTION[${it.la}] missing reduce r${prod.index}`);
+      }
+    }
+    for (const [n, target] of Object.entries(row.gotos)) {
+      assert.ok(a.nonterminals.includes(n));
+      assert.equal(st.transitions[n], target);
+    }
+  }
+});
+
 test('goto table drives consistent transitions', () => {  const a = build({
     terminals: 'a b',
     nonterminals: 'S A',

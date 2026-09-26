@@ -129,35 +129,24 @@ function analyzeGrammar(grammar) {
   }
 
   // ---- canonical collection (BFS => stable numbering) ---------------------
+  // Canonical LR(1) distinguishes item sets by the FULL items, lookaheads
+  // included: two sets sharing the same core but carrying different lookahead
+  // symbols are different states (merging them is LALR construction and
+  // invents spurious reduce/reduce conflicts). closure()/gotoSet() return
+  // items sorted by (prod, dot, lookahead), so the joined item keys form a
+  // canonical representation for the set.
   const states = [];
   const transitions = [];
   const stateIds = new Map();
-  const itemCoreKey = (it) => `${it.prod}:${it.dot}`;
-  const coreKey = (items) => [...new Set(items.map(itemCoreKey))].sort().join('|');
-  const mergeItems = (current, incoming) => {
-    const merged = new Map(current.map((it) => [itemKey(it), it]));
-    let changed = false;
-    for (const it of incoming) {
-      if (!merged.has(itemKey(it))) {
-        merged.set(itemKey(it), it);
-        changed = true;
-      }
-    }
-    return { changed, items: changed ? sortItems([...merged.values()]) : current };
-  };
+  const setKey = (items) => items.map(itemKey).join('|');
   const intern = (items) => {
-    const key = coreKey(items);
-    if (stateIds.has(key)) {
-      const id = stateIds.get(key);
-      const merged = mergeItems(states[id], items);
-      if (merged.changed) states[id] = merged.items;
-      return { id, created: false, changed: merged.changed };
-    }
+    const key = setKey(items);
+    if (stateIds.has(key)) return { id: stateIds.get(key), created: false };
     const id = states.length;
     states.push(items);
     transitions.push({});
     stateIds.set(key, id);
-    return { id, created: true, changed: true };
+    return { id, created: true };
   };
 
   intern(closure([{ prod: 0, dot: 0, la: END }]));
@@ -165,7 +154,6 @@ function analyzeGrammar(grammar) {
   while (bfsQueue.length) {
     const i = bfsQueue.shift();
     const items = states[i];
-    transitions[i] = {};
     const afterDot = new Set();
     for (const it of items) {
       const X = productions[it.prod].rhs[it.dot];
@@ -175,7 +163,7 @@ function analyzeGrammar(grammar) {
       const J = gotoSet(items, X);
       if (!J) continue;
       const result = intern(J);
-      if (result.created || result.changed) bfsQueue.push(result.id);
+      if (result.created) bfsQueue.push(result.id);
       transitions[i][X] = result.id;
     }
   }

@@ -171,6 +171,40 @@ async function main() {
       return `states=${data.analysis.states.length}`;
     });
 
+    await check('harness control grammar is conflict free with 14 states', async () => {
+      // Legal wiring-control grammar: four S rules (start a/b, via A/B, end
+      // d/e), A and B both derive c. Canonical LR(1) must report it as
+      // conflict free (lookaheads separate the c-successor states); an
+      // LALR-style core merge would fabricate reduce/reduce conflicts.
+      const data = await postReview({
+        terminals: 'a b c d e',
+        nonterminals: 'S A B',
+        start: 'S',
+        productions: 'S -> a A d\nS -> a B e\nS -> b A e\nS -> b B d\nA -> c\nB -> c',
+      });
+      assert(data.ok === true, `review failed: ${JSON.stringify(data.errors)}`);
+      const a = data.analysis;
+      assert(a.conflictFree === true, 'expected conflictFree');
+      assert(a.conflictCount === 0, 'expected zero conflicts');
+      assert(a.firstConflict === null, 'firstConflict must be empty');
+      assert(a.states.length === 14, `expected 14 canonical states, got ${a.states.length}`);
+      assert(Array.isArray(a.actionTable) && a.actionTable.length === 14, 'action table missing/short');
+      // No competing reductions (nor any competing action) anywhere in ACTION.
+      for (const row of a.actionTable) {
+        for (const [t, acts] of Object.entries(row.actions)) {
+          assert(acts.length <= 1, `state I${row.state} ACTION[${t}] has competing actions`);
+        }
+      }
+      // State numbering must be stable and reconciled with transitions.
+      a.states.forEach((st, i) => {
+        assert(st.id === i, `state id/order mismatch at index ${i}`);
+        for (const [sym, target] of Object.entries(st.transitions)) {
+          assert(Number.isInteger(target) && a.states[target], `I${i} --${sym}--> bad target`);
+        }
+      });
+      return `states=${a.states.length} firstConflict=null`;
+    });
+
     await check('shift/reduce conflict evidence', async () => {
       const data = await postReview({
         terminals: 'id +',
