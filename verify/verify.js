@@ -171,6 +171,64 @@ async function main() {
       return `states=${data.analysis.states.length}`;
     });
 
+    await check('cable-control grammar is conflict free (14 canonical LR(1) states)', async () => {
+      // Legal harness-control grammar: S starts on a/b, passes through A/B,
+      // ends on d/e; A and B both derive c. Canonical LR(1) must accept it
+      // (LALR would report a false reduce/reduce conflict).
+      const data = await postReview({
+        terminals: 'a b c d e',
+        nonterminals: 'S A B',
+        start: 'S',
+        productions: 'S -> a A d\nS -> a B e\nS -> b A e\nS -> b B d\nA -> c\nB -> c',
+      });
+      assert(data.ok === true, `review failed: ${JSON.stringify(data.errors)}`);
+      const an = data.analysis;
+      assert(an.conflictFree === true, 'expected conflictFree');
+      assert(an.conflictCount === 0, `expected zero conflicts, got ${an.conflictCount}`);
+      assert(an.states.length === 14, `expected 14 canonical states, got ${an.states.length}`);
+      // Empty-conflict evidence: firstConflict must be null, not suppressed.
+      assert(an.firstConflict === null, 'firstConflict must be null for a conflict-free grammar');
+      assert(Array.isArray(an.actionTable), 'action table missing');
+      // No ACTION cell may carry competing reductions.
+      for (const row of an.actionTable) {
+        for (const [t, acts] of Object.entries(row.actions)) {
+          assert(acts.length <= 1, `state I${row.state} on ${t} has competing actions`);
+        }
+      }
+      // Transitions and ACTION/GOTO entries must reconcile.
+      for (const st of an.states) {
+        const row = an.actionTable[st.id];
+        for (const [sym, target] of Object.entries(st.transitions)) {
+          if (an.terminals.includes(sym)) {
+            assert(row.actions[sym] && row.actions[sym][0].type === 'shift'
+              && row.actions[sym][0].state === target,
+              `missing matching shift for transition ${sym} from I${st.id}`);
+          } else {
+            assert(row.gotos[sym] === target, `GOTO mismatch on ${sym} from I${st.id}`);
+          }
+        }
+      }
+      // The two states after `a c` and `b c` share a core but must stay
+      // distinct by lookaheads (the LALR merge point). Locate them by replaying
+      // the prefixes through the emitted transitions.
+      const stateAfter = (symbols) => symbols.reduce(
+        (s, sym) => an.states[s].transitions[sym], 0);
+      const itemTexts = (s) => s.items.map((i) => i.text).sort();
+      const afterAC = an.states[stateAfter(['a', 'c'])];
+      const afterBC = an.states[stateAfter(['b', 'c'])];
+      assert(afterAC.id !== afterBC.id, '`a c` and `b c` must reach distinct states');
+      assert(JSON.stringify(itemTexts(afterAC)) === JSON.stringify(['A -> c · , d', 'B -> c · , e']),
+        'state after `a c` has unexpected lookaheads');
+      assert(JSON.stringify(itemTexts(afterBC)) === JSON.stringify(['A -> c · , e', 'B -> c · , d']),
+        'state after `b c` has unexpected lookaheads');
+      // Each reduces only on its own lookahead — no competing reductions.
+      for (const st of [afterAC, afterBC]) {
+        const cells = Object.values(an.actionTable[st.id].actions);
+        assert(cells.every((acts) => acts.length === 1), `state I${st.id} has a competing cell`);
+      }
+      return `states=${an.states.length} firstConflict=null`;
+    });
+
     await check('shift/reduce conflict evidence', async () => {
       const data = await postReview({
         terminals: 'id +',

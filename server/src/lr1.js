@@ -129,35 +129,21 @@ function analyzeGrammar(grammar) {
   }
 
   // ---- canonical collection (BFS => stable numbering) ---------------------
+  // Canonical LR(1) states are distinguished by the FULL item set, lookaheads
+  // included. States with the same core but different lookaheads are distinct
+  // states; merging them would be LALR and can manufacture false conflicts.
   const states = [];
   const transitions = [];
   const stateIds = new Map();
-  const itemCoreKey = (it) => `${it.prod}:${it.dot}`;
-  const coreKey = (items) => [...new Set(items.map(itemCoreKey))].sort().join('|');
-  const mergeItems = (current, incoming) => {
-    const merged = new Map(current.map((it) => [itemKey(it), it]));
-    let changed = false;
-    for (const it of incoming) {
-      if (!merged.has(itemKey(it))) {
-        merged.set(itemKey(it), it);
-        changed = true;
-      }
-    }
-    return { changed, items: changed ? sortItems([...merged.values()]) : current };
-  };
+  const fullKey = (items) => items.map(itemKey).join('|');
   const intern = (items) => {
-    const key = coreKey(items);
-    if (stateIds.has(key)) {
-      const id = stateIds.get(key);
-      const merged = mergeItems(states[id], items);
-      if (merged.changed) states[id] = merged.items;
-      return { id, created: false, changed: merged.changed };
-    }
+    const key = fullKey(items);
+    if (stateIds.has(key)) return { id: stateIds.get(key), created: false };
     const id = states.length;
     states.push(items);
     transitions.push({});
     stateIds.set(key, id);
-    return { id, created: true, changed: true };
+    return { id, created: true };
   };
 
   intern(closure([{ prod: 0, dot: 0, la: END }]));
@@ -175,7 +161,7 @@ function analyzeGrammar(grammar) {
       const J = gotoSet(items, X);
       if (!J) continue;
       const result = intern(J);
-      if (result.created || result.changed) bfsQueue.push(result.id);
+      if (result.created) bfsQueue.push(result.id);
       transitions[i][X] = result.id;
     }
   }
